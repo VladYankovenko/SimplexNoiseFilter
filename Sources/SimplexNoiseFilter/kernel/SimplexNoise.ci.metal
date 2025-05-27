@@ -272,39 +272,35 @@ extern "C" float4 SphericalSimplexNoise3D(
     float contrast,
     float width,
     float height,
-    coreimage::destination dest
-) {
-    // 1. Получаем UV-координаты текстуры в диапазоне [-1, 1]
-    float2 uv = (dest.coord().xy / float2(width, height)) * 2.0f - 1.0f;
+    coreimage::destination dest)
+{
+    // Нормализованные координаты текстуры [0..1]
+    float2 uv = dest.coord().xy / float2(width, height);
 
-    // 2. Генерируем точку на поверхности сферы (кубическая проекция)
-    float3 sphereDir;
-    float maxCoord = max(abs(uv.x), abs(uv.y));
+    // Переводим в сферические координаты
+    float theta = 2.0 * M_PI_F * uv.x;  // Долгота [0..2π]
+    float phi = M_PI_F * (uv.y - 0.5);   // Широта [-π/2..π/2]
 
-    if (maxCoord == abs(uv.x)) {
-        sphereDir = float3(
-            sign(uv.x),
-            uv.y / maxCoord,
-            uv.x / maxCoord // depth для коррекции искажений
-        );
-    } else {
-        sphereDir = float3(
-            uv.x / maxCoord,
-            sign(uv.y),
-            uv.y / maxCoord
-        );
-    }
+    // Конвертируем в декартовы координаты на единичной сфере
+    float3 spherePos;
+    spherePos.x = cos(phi) * cos(theta);
+    spherePos.y = cos(phi) * sin(theta);
+    spherePos.z = sin(phi);
 
-    // 3. Нормализация и применение параметров
-    sphereDir = normalize(sphereDir);
-    float3 samplePos = (sphereDir * zoom) + float3(offsetX, offsetY, offsetZ);
+    // Применяем смещения и масштабирование в 3D пространстве
+    float3 samplePos = spherePos * zoom + float3(offsetX, offsetY, offsetZ);
 
-    // 4. Сэмплируем 3D шум
+    // Получаем значение шума
     float noise = SimplexNoise::noise(samplePos.x, samplePos.y, samplePos.z);
 
-    // 5. Обработка контраста и цвета
-    noise = clamp((noise + 1.0f) * 0.5f, 0.0f, 1.0f);
-    noise = contrast != 1.0 ? pow(noise, contrast) : noise;
+    // Нормализуем и применяем контраст
+    noise = (noise + 1.0) * 0.5; // [-1..1] -> [0..1]
+
+    if (contrast != 1.0) {
+        // Безопасное применение контраста
+        noise = clamp(noise, 0.0001, 0.9999);
+        noise = 1.0 / (1.0 + pow(noise / (1.0 - noise), -contrast));
+    }
 
     return mix(lowColor, highColor, noise);
 }
