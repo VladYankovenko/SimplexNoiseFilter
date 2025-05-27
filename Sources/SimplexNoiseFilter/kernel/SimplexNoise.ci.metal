@@ -262,65 +262,51 @@ extern "C" float4 FractalNoise3D(float4 lowColor, float4 highColor, float offset
     return mix(lowColor, highColor, cVal);
 }
 
-extern "C" float4 SphericalSimplexNoise3D(float4 lowColor, float4 highColor, float offsetX, float offsetY, float offsetZ, float zoom, float contrast, float width, float height, coreimage::destination dest) {
-    // 获取当前像素坐标
-    float x = dest.coord().x;
-    float y = dest.coord().y;
-    
-    // 将像素坐标归一化到[0,1]范围
-    // 我们需要传入纹理的宽度和高度作为参数
-    float u = x / width;
-    float v = y / height;
-    
-    // 转换为球面坐标 (theta, phi)
-    float theta = 2.0f * M_PI_F * u + offsetX / zoom; // 经度 [0, 2π]
-    float phi = M_PI_F * v - M_PI_F / 2.0f + offsetY / zoom; // 纬度 [-π/2, π/2]
-    
-    // 转换为3D笛卡尔坐标
-    float sampleX = cos(phi) * cos(theta);
-    float sampleY = cos(phi) * sin(theta);
-    float sampleZ = sin(phi) + offsetZ / zoom;
-    
-    // 处理极点扭曲
-    float polarThreshold = 0.7f; // sin(phi) > 0.7 约等于纬度 > 45度
-    float noiseValue;
-    
-    if (abs(sin(phi)) > polarThreshold) {
-        // 在极点附近使用多重采样
-        float noiseSum = 0.0f;
-        int samples = 8;
-        float polarWeight = (1.0f - abs(sin(phi))) / (1.0f - polarThreshold);
-        
-        for (int i = 0; i < samples; i++) {
-            float sampleTheta = theta + (2.0f * M_PI_F * i) / samples;
-            float x1 = cos(phi) * cos(sampleTheta);
-            float y1 = cos(phi) * sin(sampleTheta);
-            float z1 = sin(phi) + offsetZ / zoom;
-            
-            noiseSum += SimplexNoise::noise(x1 * zoom, y1 * zoom, z1 * zoom);
-        }
-        
-        // 混合多重采样结果和单点采样结果
-        float singleSampleNoise = SimplexNoise::noise(sampleX * zoom, sampleY * zoom, sampleZ * zoom);
-        noiseValue = mix(noiseSum / samples, singleSampleNoise, polarWeight);
+extern "C" float4 SphericalSimplexNoise3D(
+    float4 lowColor,
+    float4 highColor,
+    float offsetX,
+    float offsetY,
+    float offsetZ,
+    float zoom,
+    float contrast,
+    float width,
+    float height,
+    coreimage::destination dest
+) {
+    // 1. Получаем UV-координаты текстуры в диапазоне [-1, 1]
+    float2 uv = (dest.coord().xy / float2(width, height)) * 2.0f - 1.0f;
+
+    // 2. Генерируем точку на поверхности сферы (кубическая проекция)
+    float3 sphereDir;
+    float maxCoord = max(abs(uv.x), abs(uv.y));
+
+    if (maxCoord == abs(uv.x)) {
+        sphereDir = float3(
+            sign(uv.x),
+            uv.y / maxCoord,
+            uv.x / maxCoord // depth для коррекции искажений
+        );
     } else {
-        // 正常区域使用标准采样
-        noiseValue = SimplexNoise::noise(sampleX * zoom, sampleY * zoom, sampleZ * zoom);
+        sphereDir = float3(
+            uv.x / maxCoord,
+            sign(uv.y),
+            uv.y / maxCoord
+        );
     }
-    
-    // 归一化到[0,1]范围
-    noiseValue = (noiseValue + 1.0f) / 2.0f;
-    
-    // 应用对比度调整
-    if (contrast == 1.0f) { return mix(lowColor, highColor, noiseValue); }
-    if (noiseValue == 0.0f) { return lowColor; }
-    if (noiseValue == 1.0f) { return highColor; }
-    
-    // 应用sigmoid函数调整对比度
-    float cVal = 1.0f / (1.0f + pow(noiseValue / (1.0f - noiseValue), -contrast));
-    
-    // 返回混合颜色值
-    return mix(lowColor, highColor, cVal);
+
+    // 3. Нормализация и применение параметров
+    sphereDir = normalize(sphereDir);
+    float3 samplePos = (sphereDir * zoom) + float3(offsetX, offsetY, offsetZ);
+
+    // 4. Сэмплируем 3D шум
+    float noise = SimplexNoise::noise(samplePos.x, samplePos.y, samplePos.z);
+
+    // 5. Обработка контраста и цвета
+    noise = clamp((noise + 1.0f) * 0.5f, 0.0f, 1.0f);
+    noise = contrast != 1.0 ? pow(noise, contrast) : noise;
+
+    return mix(lowColor, highColor, noise);
 }
 
 extern "C" float4 SphericalFractalNoise3D(
